@@ -58,10 +58,12 @@ class CausalSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T) quadratic complexity
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+        # print(att.shape)
+        att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))  # mask attention
         att = F.softmax(att, dim=-1)
+        # print(att)
         att = self.attn_dropout(att)
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
@@ -136,7 +138,7 @@ class GPT(nn.Module):
                 'gopher-44m':   dict(n_layer=8, n_head=16, n_embd=512),
                 # (there are a number more...)
                 # I made these tiny models up
-                'gpt-mini':     dict(n_layer=6, n_head=6, n_embd=192),
+                'gpt-mini':     dict(n_layer=6, n_head=1, n_embd=192),  # n_head=6
                 'gpt-micro':    dict(n_layer=4, n_head=4, n_embd=128),
                 'gpt-nano':     dict(n_layer=3, n_head=3, n_embd=48),
             }[config.model_type])
@@ -264,9 +266,17 @@ class GPT(nn.Module):
         pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0) # shape (1, t)
 
         # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (1, t, n_embd)
-        x = self.transformer.drop(tok_emb + pos_emb)
+
+        # token embeddings of shape (b, t, d)
+        tok_emb = self.transformer.wte(idx)
+        # position embeddings of shape (1, t, d)
+        pos_emb = self.transformer.wpe(pos) 
+        
+        x = (tok_emb + pos_emb)
+
+        x = self.transformer.drop(x)
+        
+         # after adding the positional encoding, before the attention block
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
@@ -304,6 +314,7 @@ class GPT(nn.Module):
                 idx_next = torch.multinomial(probs, num_samples=1)
             else:
                 _, idx_next = torch.topk(probs, k=1, dim=-1)
+            # print(idx_next)
             # append sampled index to the running sequence and continue
             idx = torch.cat((idx, idx_next), dim=1)
 
